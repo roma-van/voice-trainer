@@ -264,7 +264,7 @@
   function interruptOn(){ return $('intr').checked; }
   // Чи має мікрофон працювати зараз
   function micWanted(){ return listening && (!speaking || interruptOn()); }
-  var curIdx = -1, echo = [], echoUntil = 0;
+  var curIdx = -1, prevIdx = -1, echo = [], echoUntil = 0;
   $('rateV').textContent = (+$('rate').value).toFixed(1);
   $('thrV').textContent = $('thr').value;
 
@@ -273,7 +273,7 @@
     try { $('toggle').style.boxShadow = ''; } catch(e){}
   }
 
-  var STOP = ['що','як','її','їх','його','це','та','і','й','в','у','на','до','з','із','зі','за','про','для','чи','а','але','або','який','яка','яке','які','такий','така','таке','такі','є','ли','ти','ви','мені','скажи','поясни','будь','ласка','что','это','как','и','в','на','the','a','an','is','of','to','what','how','are','do','does'];
+  var STOP = ['що','як','її','їх','його','це','та','і','й','в','у','на','до','з','із','зі','за','про','для','чи','а','але','або','який','яка','яке','які','такий','така','таке','такі','є','ли','ти','ви','мені','скажи','поясни','будь','ласка','розкажіть','розкажи','поясніть','назвіть','опишіть','охарактеризуйте','дайте','наступне','питання','тепер','далі','так','ну','добре','дякую','что','это','как','и','в','на','the','a','an','is','of','to','what','how','are','do','does'];
 
   function norm(t){ return t.toLowerCase().replace(/[ʼ'’`]/g,'').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim(); }
   function stem(w){ return w.length > 5 ? w.slice(0, Math.max(4, w.length - 2)) : w; }
@@ -366,26 +366,51 @@
     if (!words.length) return;
     // Під час озвучення: окремо слова, яких немає у відповіді, що звучить
     var fresh = talking ? words.filter(function(h){ return !isEcho(h); }) : words;
-    if (talking && !fresh.length) return;
-    var best = null, bs = 0, thr = +$('thr').value / 100;
+    var thr = +$('thr').value / 100;
+    function drop(msg){ pend = null; clearTimeout(pendTimer); if (msg) $('near').textContent = msg; }
+    if (talking && !fresh.length) return drop('Схоже на повторення відповіді — ігнорую');
+
+    // Під час відповіді (і 8 с після неї) ви можете повторювати її вголос.
+    // Повторення — це довга фраза, здебільшого зі слів відповіді.
+    // Нове питання — коротка фраза, майже вся зі слів питання.
+    var cw = talking ? keyWords(chunk || '') : [];
+    if (talking && cw.length) {
+      var echoShare = cw.filter(isEcho).length / cw.length;
+      if (echoShare > 0.6) return drop('Схоже на повторення відповіді — ігнорую');
+    }
+    function coverage(p){   // яка частка сказаної фрази — це слова питання p
+      if (!cw.length) return 1;
+      var n = 0;
+      cw.forEach(function(h){ for (var j = 0; j < p.k.length; j++) if (sim(h, p.k[j]) >= 0.6) { n++; break; } });
+      return n / cw.length;
+    }
+
+    var best = null, bs = 0;
     pairs.forEach(function(p, i){
-      if (talking && i === curIdx) return;               // не перезапускати ту саму відповідь
+      if (talking && (i === curIdx || i === prevIdx)) return;   // не перезапускати ту саму (чи попередню) відповідь
       var s = score(words, p);
-      // Відсіюємо збіги, які пояснюються лише власним голосом сторінки
-      if (talking && score(fresh, p) < 0.3) return;
+      if (talking) {
+        // Відсіюємо збіги, які пояснюються лише голосом відповіді (сторінки чи вашим)
+        if (score(fresh, p) < 0.3) return;
+        // Фраза має складатися переважно зі слів питання, а не бути довгим реченням
+        if (s >= thr && coverage(p) < 0.5) return;
+      }
       if (s > bs || (s === bs && best !== null && s > 0 && p.k.length > pairs[best].k.length)) { bs = s; best = i; } });
     // Підказка: що найближче до почутого — допомагає підібрати «Точність збігу»
     $('near').textContent = best !== null && bs > 0
       ? 'Найближче: «' + pairs[best].q + '» — ' + Math.round(bs * 100) + '% (поріг ' + Math.round(thr * 100) + '%)' : '';
-    if (best === null || bs < thr) { if (isFinal) { pend = null; clearTimeout(pendTimer); } return; }
-    if (isFinal || bs >= 1) { fire(best); return; }
+    // Збіг пропав — скасовуємо очікування (фраза виявилась не питанням)
+    if (best === null || bs < thr) return drop();
+    if (isFinal || (bs >= 1 && !talking)) { fire(best); return; }
     // Проміжний результат: Safari на iPhone часто довго не «закриває» фразу.
-    // Якщо той самий збіг тримається ~0,8 с — відповідаємо, не чекаючи кінця фрази.
+    // Якщо той самий збіг тримається — відповідаємо, не чекаючи кінця фрази.
+    // Під час відповіді чекаємо довше: раптом це початок вашого повторення.
+    var hold = talking ? 1300 : 800;
     var now = Date.now();
-    if (pend && pend.i === best) { if (now - pend.t >= 800) fire(best); return; }
+    if (pend && pend.i === best) { if (now - pend.t >= hold) fire(best); return; }
     pend = { i: best, t: now };
     clearTimeout(pendTimer);
-    pendTimer = setTimeout(function(){ if (pend && pend.i === best) fire(best); }, 900);
+    pendTimer = setTimeout(function(){ if (pend && pend.i === best) fire(best); }, hold + 100);
   }
 
   // --- Озвучення (iOS Safari) ---
@@ -443,8 +468,8 @@
   function finishSpeaking(id){
     if (id !== speakId || !speaking) return;
     clearTimeout(speakTimer);
-    // Ще 2 с фільтруємо «хвіст» власного голосу, який розпізнавач може видати із запізненням
-    speaking = false; buffer = ''; echoUntil = Date.now() + 2000; setStatus();
+    // Ще 8 с фільтруємо слова відповіді: ви можете договорювати її після сторінки
+    speaking = false; buffer = ''; echoUntil = Date.now() + 8000; setStatus();
     // Якщо мікрофон був на паузі — вмикаємо після невеликої паузи
     // або якщо він «відвалився» під час озвучення — не чекаємо довгої паузи
     fails = 0;
@@ -461,7 +486,12 @@
     var id = ++speakId;
     clearTimeout(speakTimer);
     speaking = true; buffer = '';
-    curIdx = pairs.indexOf(p); echo = keyWords(p.a);
+    // Якщо перебили попередню відповідь, а ви ще договорюєте її — її слова теж не рахуємо
+    var interrupted = speaking || Date.now() < echoUntil;
+    var newIdx = pairs.indexOf(p);
+    prevIdx = interrupted && curIdx !== newIdx ? curIdx : -1;
+    echo = keyWords(p.a).concat(interrupted && prevIdx >= 0 ? keyWords(pairs[prevIdx].a) : []);
+    curIdx = newIdx;
     var keepMic = listening && interruptOn() && rec;
     if (!keepMic) stopRec();          // режим без перебивання: мікрофон на паузу
     setStatus();
