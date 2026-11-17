@@ -222,6 +222,10 @@
         <input type="range" id="thr" min="40" max="95" step="5" value="70">
         <span class="hint">Якщо питання не впізнаються, зменште. Якщо сторінка реагує на зайве, збільште.</span>
       </div>
+      <div style="grid-column:1/-1">
+        <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin:0"><input type="checkbox" id="intr" checked> Перебивати відповідь, якщо прозвучало нове питання</label>
+        <span class="hint">Мікрофон слухає і під час озвучення. Якщо сторінка реагує на власний голос, вимкніть або слухайте через навушники.</span>
+      </div>
     </div>
   </div>
 
@@ -246,12 +250,17 @@
   try { var s = JSON.parse(localStorage.getItem(KEY) || '{}');
     if (s.qa) $('qa').value = s.qa; if (s.lang) $('lang').value = s.lang;
     if (s.rate) $('rate').value = s.rate; if (s.thr) $('thr').value = s.thr;
+    if (typeof s.intr === 'boolean') $('intr').checked = s.intr;
   } catch(e){}
+  function interruptOn(){ return $('intr').checked; }
+  // Чи має мікрофон працювати зараз
+  function micWanted(){ return listening && (!speaking || interruptOn()); }
+  var curIdx = -1, echo = [], echoUntil = 0;
   $('rateV').textContent = (+$('rate').value).toFixed(1);
   $('thrV').textContent = $('thr').value;
 
   function save(){
-    try { localStorage.setItem(KEY, JSON.stringify({ qa:$('qa').value, lang:$('lang').value, rate:$('rate').value, thr:$('thr').value })); } catch(e){}
+    try { localStorage.setItem(KEY, JSON.stringify({ qa:$('qa').value, lang:$('lang').value, rate:$('rate').value, thr:$('thr').value, intr:$('intr').checked })); } catch(e){}
   }
 
   var STOP = ['що','як','її','їх','його','це','та','і','й','в','у','на','до','з','із','зі','за','про','для','чи','а','але','або','який','яка','яке','які','такий','така','таке','такі','є','ли','ти','ви','мені','скажи','поясни','будь','ласка','что','это','как','и','в','на','the','a','an','is','of','to','what','how','are','do','does'];
@@ -280,23 +289,31 @@
     $('count').textContent = 'Пар у списку: ' + pairs.length;
   }
 
+  function same(h, w){ return h === w || (w.length >= 4 && (h.indexOf(w) === 0 || w.indexOf(h) === 0) && Math.min(h.length,w.length) >= 4); }
   function score(heardWords, p){
     if (!p.k.length) return 0;
     var hit = 0;
     p.k.forEach(function(w){
-      for (var i = 0; i < heardWords.length; i++) {
-        var h = heardWords[i];
-        if (h === w || (w.length >= 4 && (h.indexOf(w) === 0 || w.indexOf(h) === 0) && Math.min(h.length,w.length) >= 4)) { hit++; break; }
-      }
+      for (var i = 0; i < heardWords.length; i++) { if (same(heardWords[i], w)) { hit++; break; } }
     });
     return hit / p.k.length;
   }
+  // Слово могло прозвучати з динаміка (з поточної відповіді)
+  function isEcho(h){ for (var i = 0; i < echo.length; i++) if (same(h, echo[i])) return true; return false; }
 
   function check(isFinal){
     var words = keyWords(buffer).slice(-40);
     if (!words.length) return;
+    var talking = speaking || Date.now() < echoUntil;
+    // Під час озвучення: окремо слова, яких немає у відповіді, що звучить
+    var fresh = talking ? words.filter(function(h){ return !isEcho(h); }) : words;
+    if (talking && !fresh.length) return;
     var best = null, bs = 0, thr = isFinal ? +$('thr').value / 100 : 1;
-    pairs.forEach(function(p, i){ var s = score(words, p);
+    pairs.forEach(function(p, i){
+      if (talking && i === curIdx) return;               // не перезапускати ту саму відповідь
+      var s = score(words, p);
+      // Відсіюємо збіги, які пояснюються лише власним голосом сторінки
+      if (talking && score(fresh, p) < 0.3) return;
       if (s > bs || (s === bs && best !== null && s > 0 && p.k.length > pairs[best].k.length)) { bs = s; best = i; } });
     if (best !== null && bs >= thr) {
       var now = Date.now();
@@ -330,9 +347,10 @@
   function finishSpeaking(id){
     if (id !== speakId || !speaking) return;
     clearTimeout(speakTimer);
-    speaking = false; buffer = ''; setStatus();
-    // Невелика пауза, щоб iOS переключив аудіо назад на мікрофон
-    if (listening) setTimeout(startRec, 400);
+    // Ще 2 с фільтруємо «хвіст» власного голосу, який розпізнавач може видати із запізненням
+    speaking = false; buffer = ''; echoUntil = Date.now() + 2000; setStatus();
+    // Якщо мікрофон був на паузі — вмикаємо після невеликої паузи
+    if (listening && !rec) setTimeout(startRec, 400);
   }
 
   function say(p){
@@ -343,9 +361,13 @@
     $('answer').appendChild(document.createTextNode(p.a));
     if (!('speechSynthesis' in window)) return;
     var id = ++speakId;
-    speaking = true; setStatus();
-    stopRec();                       // мікрофон на паузу, щоб не чути себе
-    try { speechSynthesis.cancel(); } catch(e){}
+    clearTimeout(speakTimer);
+    speaking = true; buffer = '';
+    curIdx = pairs.indexOf(p); echo = keyWords(p.a);
+    var keepMic = listening && interruptOn() && rec;
+    if (!keepMic) stopRec();          // режим без перебивання: мікрофон на паузу
+    setStatus();
+    try { speechSynthesis.cancel(); } catch(e){}  // обриваємо попередню відповідь
     var lang = $('lang').value, rate = +$('rate').value;
     var voice = pickVoice(lang);
     var list = chunks(p.a), i = 0;
@@ -362,14 +384,14 @@
       u.onerror = function(e){ if (e && e.error === 'interrupted' && id !== speakId) return; next(); };
       speechSynthesis.speak(u);
     }
-    // Даємо мікрофону звільнитися перед відтворенням
-    setTimeout(next, 250);
+    // Коротка пауза: iOS ігнорує speak() одразу після cancel()
+    setTimeout(next, keepMic ? 120 : 250);
   }
 
   function setStatus(){
     var d = $('dot'), s = $('status');
-    d.className = 'dot' + (listening && !speaking ? ' live' : '');
-    s.lastChild.textContent = !listening ? 'Вимкнено' : speaking ? 'Озвучую відповідь…' : 'Слухаю…';
+    d.className = 'dot' + (micWanted() ? ' live' : '');
+    s.lastChild.textContent = !listening ? 'Вимкнено' : !speaking ? 'Слухаю…' : interruptOn() ? 'Озвучую відповідь… (слухаю нове питання)' : 'Озвучую відповідь…';
   }
 
   // --- Розпізнавання з автоперезапуском ---
@@ -381,18 +403,18 @@
   }
   function scheduleRestart(ms){
     clearTimeout(restartTimer);
-    restartTimer = setTimeout(function(){ if (listening && !speaking) startRec(); }, ms);
+    restartTimer = setTimeout(function(){ if (micWanted()) startRec(); }, ms);
   }
 
   function startRec(){
-    if (!SR || !listening || speaking) return;
+    if (!SR || !micWanted()) return;
     stopRec();
     var r = new SR(); rec = r;
     r.lang = $('lang').value; r.continuous = true; r.interimResults = true;
     r.onstart = function(){ if (r === rec) { recActive = true; lastActivity = Date.now(); setStatus(); } };
     r.onaudiostart = r.onspeechstart = function(){ if (r === rec) lastActivity = Date.now(); };
     r.onresult = function(e){
-      if (r !== rec || speaking) return;
+      if (r !== rec || !micWanted()) return;
       lastActivity = Date.now();
       var interim = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {
@@ -412,19 +434,19 @@
       }
     };
     // Safari часто зупиняє розпізнавання сам — запускаємо знову
-    r.onend = function(){ if (r !== rec) return; recActive = false; if (listening && !speaking) scheduleRestart(300); };
+    r.onend = function(){ if (r !== rec) return; recActive = false; if (micWanted()) scheduleRestart(300); };
     try { r.start(); lastActivity = Date.now(); } catch(e){ scheduleRestart(1000); }
     setStatus();
   }
 
   // Сторож: якщо Safari «завис» без onend — перезапускаємо
   setInterval(function(){
-    if (!listening || speaking) return;
+    if (!micWanted()) return;
     if (!rec || (!recActive && Date.now() - lastActivity > 4000) || Date.now() - lastActivity > 25000) startRec();
   }, 3000);
   // Повернення на вкладку / розблокування телефону
   document.addEventListener('visibilitychange', function(){
-    if (document.visibilityState === 'visible' && listening && !speaking) startRec();
+    if (document.visibilityState === 'visible' && micWanted()) startRec();
   });
 
   $('toggle').onclick = function(){
@@ -448,7 +470,8 @@
   $('qa').addEventListener('input', function(){ parse(); save(); });
   $('rate').oninput = function(){ $('rateV').textContent = (+this.value).toFixed(1); save(); };
   $('thr').oninput = function(){ $('thrV').textContent = this.value; save(); };
-  $('lang').onchange = function(){ save(); if (listening && !speaking) startRec(); };
+  $('lang').onchange = function(){ save(); if (micWanted()) startRec(); };
+  $('intr').onchange = function(){ save(); if (speaking && !interruptOn()) stopRec(); else if (micWanted() && !rec) startRec(); setStatus(); };
   if ('speechSynthesis' in window) {
     loadVoices();
     try { speechSynthesis.addEventListener('voiceschanged', loadVoices); } catch(e){ speechSynthesis.onvoiceschanged = loadVoices; }
