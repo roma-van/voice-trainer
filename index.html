@@ -407,6 +407,21 @@
         var tail = cwAll.slice(-L), altTail = altAll.slice(-L);
         var isQ = function(h){ return p.k.some(function(w){ return sim(h, w) >= 0.6; }); };
         // Перше слово питання, якого немає у відповіді, що звучить, — звідси точно говорите ви
+        // Усе питання прозвучало підряд і по порядку — це точно ви, навіть якщо його слова є у відповіді
+        if (p.k.length >= 2) {
+          var run = 0, x0;
+          for (x0 = 0; x0 < tail.length; x0++) {
+            var m = 0;
+            while (m < p.k.length && x0 + m < tail.length && sim(tail[x0 + m], p.k[m]) >= 0.6) m++;
+            if (m > run) run = m;
+          }
+          if (run === p.k.length) {
+            s = 1;
+            if (s > nearS) { nearS = s; nearI = i; }
+            if (s > bs || (s === bs && best !== null && p.k.length > pairs[best].k.length)) { bs = s; best = i; }
+            return;
+          }
+        }
         var ff = 0;
         while (ff < tail.length && !(isQ(tail[ff]) && !isEchoCur(tail[ff]))) ff++;
         var anyFreshAlt = altTail.some(function(h){ return isQ(h) && !isEchoCur(h); });
