@@ -418,7 +418,7 @@
             if (m > run) run = m;
           }
           if (run === p.k.length) {
-            s = 1;
+            s = 1.01;   // точна фраза по порядку важить трохи більше, ніж збіг із розкиданих слів
             if (s > nearS) { nearS = s; nearI = i; }
             if (s > bs || (s === bs && best !== null && p.k.length > pairs[best].k.length)) { bs = s; best = i; }
             return;
@@ -460,7 +460,7 @@
       if (s > bs || (s === bs && best !== null && s > 0 && p.k.length > pairs[best].k.length)) { bs = s; best = i; } });
     // Підказка: що найближче до почутого — допомагає підібрати «Точність збігу»
     $('near').textContent = best === null && echoSeen ? 'Схоже на повторення відповіді — ігнорую'
-      : nearI !== null && nearS > 0 ? 'Найближче: «' + pairs[nearI].q + '» — ' + Math.round(nearS * 100) + '% (поріг ' + Math.round(thr * 100) + '%)' : '';
+      : nearI !== null && nearS > 0 ? 'Найближче: «' + pairs[nearI].q + '» — ' + Math.min(100, Math.round(nearS * 100)) + '% (поріг ' + Math.round(thr * 100) + '%)' : '';
     if (best !== null && talking && (best === curIdx || best === prevIdx)) {
       $('near').textContent = 'Чую питання «' + pairs[best].q + '» — на нього вже відповідаю';
       return drop();
