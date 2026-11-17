@@ -416,11 +416,14 @@
           if (raw >= thr) echoSeen = true;   // збіг пояснюється лише словами відповіді
           return;
         }
-        // Слова відповіді, що прозвучали ДО вашого питання, дають лише половину бала
+        // Слова відповіді, що прозвучали ДО вашого питання й відділені від нього іншими словами,
+        // дають лише половину бала (це голос сторінки). Суцільний початок питання — ваш, рахується повністю.
+        var qStart = ff;
+        while (qStart > 0 && isQ(tail[qStart - 1])) qStart--;
         var hit = 0;
         p.k.forEach(function(w){
           var b = 0;
-          for (var x = 0; x < tail.length; x++) b = Math.max(b, sim(tail[x], w) * (x < ff && isEchoCur(tail[x]) ? 0.5 : 1));
+          for (var x = 0; x < tail.length; x++) b = Math.max(b, sim(tail[x], w) * (x < qStart && isEchoCur(tail[x]) ? 0.5 : 1));
           for (var y = 0; y < altTail.length; y++) b = Math.max(b, sim(altTail[y], w) * (isEchoCur(altTail[y]) ? 0.5 : 1));
           hit += b;
         });
