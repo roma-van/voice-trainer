@@ -312,7 +312,7 @@
     }
     return prev[b.length];
   }
-  var sameCache = {};
+  var sameCache = {}, sameCount = 0;
   function same(h, w){
     if (h === w) return true;
     if (w.length >= 4 && (h.indexOf(w) === 0 || w.indexOf(h) === 0) && Math.min(h.length,w.length) >= 4) return true;
@@ -322,16 +322,24 @@
     var hh = h.slice(0, w.length + 1);   // почуте слово може мати інше закінчення
     var d = Math.min(lev(h, w), lev(hh, w));
     var ok = d <= (w.length >= 8 ? 2 : 1) && h[0] === w[0];
-    if (Object.keys(sameCache).length > 20000) sameCache = {};
+    if (++sameCount > 50000) { sameCache = {}; sameCount = 0; }
     return (sameCache[key] = ok);
   }
   // Схожість слова 0..1: повний збіг — 1, «майже» (одна-дві літери не ті) — часткова оцінка
+  var simCache = {}, simCount = 0;
   function sim(h, w){
-    if (same(h, w)) return 1;
-    if (Math.min(h.length, w.length) < 4 || h[0] !== w[0]) return 0;
-    var d = Math.min(lev(h.slice(0, w.length), w), lev(h.slice(0, w.length + 1), w));
-    var s = 1 - d / w.length;
-    return s >= 0.5 ? s * 0.8 : 0;
+    var key = h + '|' + w;
+    if (key in simCache) return simCache[key];
+    var s;
+    if (same(h, w)) s = 1;
+    else if (Math.min(h.length, w.length) < 4 || h[0] !== w[0]) s = 0;
+    else {
+      var d = Math.min(lev(h.slice(0, w.length), w), lev(h.slice(0, w.length + 1), w));
+      s = 1 - d / w.length;
+      s = s >= 0.5 ? s * 0.8 : 0;
+    }
+    if (++simCount > 50000) { simCache = {}; simCount = 0; }
+    return (simCache[key] = s);
   }
   function score(heardWords, p){
     if (!p.k.length) return 0;
