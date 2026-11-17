@@ -371,47 +371,56 @@
     if (alts) words = words.concat(keyWords(alts));
     if (!words.length) return;
     // Під час озвучення: окремо слова, яких немає у відповіді, що звучить
-    var fresh = talking ? words.filter(function(h){ return !isEcho(h); }) : words;
     var thr = +$('thr').value / 100;
     function drop(msg){ pend = null; clearTimeout(pendTimer); if (msg) $('near').textContent = msg; }
-    if (talking && !fresh.length) return drop('Схоже на повторення відповіді — ігнорую');
 
     // Під час відповіді (і 8 с після неї) ви можете повторювати її вголос.
-    // Повторення — це довга фраза, здебільшого зі слів відповіді.
-    // Нове питання — коротка фраза, майже вся зі слів питання.
-    var cw = talking ? keyWords(chunk || '') : [];
-    if (talking && cw.length) {
-      var echoShare = cw.filter(isEcho).length / cw.length;
-      if (echoShare > 0.7) return drop('Схоже на повторення відповіді — ігнорую');
-    }
-    function coverage(p){   // яка частка сказаної фрази — це слова питання p
-      if (!cw.length) return 1;
+    // Safari на iPhone часто склеює все почуте в одну довгу фразу (і голос сторінки, і ваш),
+    // тому для кожного питання дивимось лише на «хвіст» почутого — останні слова довжиною з це питання.
+    // Повторення відповіді — хвіст здебільшого зі слів відповіді.
+    // Нове питання — хвіст майже весь зі слів питання.
+    var cwAll = talking ? keyWords(chunk || '') : [];
+    var altAll = talking && alts ? keyWords(alts) : [];
+    function coverage(tail, p){   // яка частка хвоста — це слова питання p
+      if (!tail.length) return 1;
       var n = 0;
-      cw.forEach(function(h){ for (var j = 0; j < p.k.length; j++) if (sim(h, p.k[j]) >= 0.6) { n++; break; } });
-      return n / cw.length;
+      tail.forEach(function(h){ for (var j = 0; j < p.k.length; j++) if (sim(h, p.k[j]) >= 0.6) { n++; break; } });
+      return n / tail.length;
     }
 
-    var best = null, bs = 0;
+    var best = null, bs = 0, nearI = null, nearS = 0, echoSeen = false;
     pairs.forEach(function(p, i){
       if (talking && (i === curIdx || i === prevIdx)) return;   // не перезапускати ту саму (чи попередню) відповідь
-      var s = score(words, p);
-      if (talking) {
-        // Відсіюємо збіги, які пояснюються лише голосом відповіді (сторінки чи вашим)
-        if (score(fresh, p) < 0.3) return;
-        // Фраза має складатися переважно зі слів питання, а не бути довгим реченням
-        if (s >= thr && coverage(p) < 0.5) return;
+      var s;
+      if (!talking) s = score(words, p);
+      else {
+        var L = p.k.length + 2;
+        var tail = cwAll.slice(-L), tw = tail.concat(altAll.slice(-L));
+        s = score(tw, p);
+        if (s > nearS) { nearS = s; nearI = i; }
+        if (s < thr) return;
+        // Відсіюємо збіги, які пояснюються лише словами відповіді (голос сторінки чи ваш)
+        if (score(tw.filter(function(h){ return !isEcho(h); }), p) < 0.3) { echoSeen = true; return; }
+        if (tail.length && tail.filter(isEcho).length / tail.length > 0.7) { echoSeen = true; return; }
+        // Хвіст має складатися переважно зі слів питання
+        if (coverage(tail, p) < 0.5) { echoSeen = true; return; }
       }
+      if (!talking && s > nearS) { nearS = s; nearI = i; }
       if (s > bs || (s === bs && best !== null && s > 0 && p.k.length > pairs[best].k.length)) { bs = s; best = i; } });
     // Підказка: що найближче до почутого — допомагає підібрати «Точність збігу»
-    $('near').textContent = best !== null && bs > 0
-      ? 'Найближче: «' + pairs[best].q + '» — ' + Math.round(bs * 100) + '% (поріг ' + Math.round(thr * 100) + '%)' : '';
-    // Збіг пропав — скасовуємо очікування (фраза виявилась не питанням)
-    if (best === null || bs < thr) return drop();
+    $('near').textContent = best === null && echoSeen ? 'Схоже на повторення відповіді — ігнорую'
+      : nearI !== null && nearS > 0 ? 'Найближче: «' + pairs[nearI].q + '» — ' + Math.round(nearS * 100) + '% (поріг ' + Math.round(thr * 100) + '%)' : '';
+    if (best === null || bs < thr) {
+      // Поки звучить відповідь, Safari одразу дописує до фрази нові слова, і збіг «з'їжджає» з хвоста.
+      // Тому знайдене питання не скасовуємо — воно спрацює після короткої перевірки.
+      if (!talking || isFinal && !pend) drop();
+      return;
+    }
     if (isFinal || (bs >= 1 && !talking)) { fire(best); return; }
     // Проміжний результат: Safari на iPhone часто довго не «закриває» фразу.
     // Якщо той самий збіг тримається — відповідаємо, не чекаючи кінця фрази.
     // Під час відповіді чекаємо довше: раптом це початок вашого повторення.
-    var hold = talking ? 1300 : 800;
+    var hold = talking ? 600 : 800;
     var now = Date.now();
     if (pend && pend.i === best) { if (now - pend.t >= hold) fire(best); return; }
     pend = { i: best, t: now };
@@ -477,9 +486,10 @@
     // Ще 8 с фільтруємо слова відповіді: ви можете договорювати її після сторінки
     speaking = false; buffer = ''; echoUntil = Date.now() + 8000; setStatus();
     // Якщо мікрофон був на паузі — вмикаємо після невеликої паузи
-    // або якщо він «відвалився» під час озвучення — не чекаємо довгої паузи
+    // Після озвучення iPhone часто «глухне»: мікрофон наче працює, але нічого не чує.
+    // Тому завжди запускаємо розпізнавання наново.
     fails = 0;
-    if (listening && (!rec || !recActive)) scheduleRestart(400);
+    if (listening) { stopRec(); scheduleRestart(250); }
   }
 
   function say(p){
@@ -516,6 +526,8 @@
       u.lang = lang;
       if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch(e){} }
       u.onend = next;
+      // Коли почався звук відповіді, iOS перемикає аудіо — перезапускаємо мікрофон, щоб він не «оглух»
+      if (i === 1 && keepMic) u.onstart = function(){ if (id === speakId && micWanted()) scheduleRestart(300); };
       u.onerror = function(e){ if (e && e.error === 'interrupted' && id !== speakId) return; next(); };
       // iOS після фону інколи лишає озвучення «на паузі»
       try { speechSynthesis.resume(); } catch(e){}
@@ -604,7 +616,7 @@
       // Збій — це коли розпізнавання впало майже одразу після старту; звичайна тиша — не збій
       if (!gotResult && Date.now() - startedAt < 1500) fails++;
       else if (!note) fails = 0;
-      if (micWanted()) scheduleRestart(fails > 2 ? Math.min(5000, 300 * Math.pow(2, fails - 2)) : 300);
+      if (micWanted()) scheduleRestart(fails > 2 ? Math.min(5000, 300 * Math.pow(2, fails - 2)) : 80);
     };
     try { r.start(); lastActivity = Date.now(); } catch(e){ fails++; scheduleRestart(1000); }
     setStatus();
@@ -620,7 +632,8 @@
   // Сторож: якщо Safari «завис» без onend — перезапускаємо
   setInterval(function(){
     if (!micWanted()) return;
-    if (!rec || (!recActive && Date.now() - lastActivity > 4000) || Date.now() - lastActivity > 25000) startRec();
+    // Довга тиша: свіжий перезапуск, але не посеред фрази (якщо щойно щось чули — не чіпаємо)
+    if (!rec || (!recActive && Date.now() - lastActivity > 4000) || Date.now() - lastActivity > 40000) startRec();
   }, 3000);
   // Повернення на вкладку / розблокування телефону
   document.addEventListener('visibilitychange', function(){
