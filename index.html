@@ -324,11 +324,21 @@
     if (Object.keys(sameCache).length > 20000) sameCache = {};
     return (sameCache[key] = ok);
   }
+  // Схожість слова 0..1: повний збіг — 1, «майже» (одна-дві літери не ті) — часткова оцінка
+  function sim(h, w){
+    if (same(h, w)) return 1;
+    if (Math.min(h.length, w.length) < 4 || h[0] !== w[0]) return 0;
+    var d = Math.min(lev(h.slice(0, w.length), w), lev(h.slice(0, w.length + 1), w));
+    var s = 1 - d / w.length;
+    return s >= 0.5 ? s * 0.8 : 0;
+  }
   function score(heardWords, p){
     if (!p.k.length) return 0;
     var hit = 0;
     p.k.forEach(function(w){
-      for (var i = 0; i < heardWords.length; i++) { if (same(heardWords[i], w)) { hit++; break; } }
+      var b = 0;
+      for (var i = 0; i < heardWords.length && b < 1; i++) b = Math.max(b, sim(heardWords[i], w));
+      hit += b;
     });
     return hit / p.k.length;
   }
