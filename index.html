@@ -344,7 +344,13 @@
     return hit / p.k.length;
   }
   // Слово могло прозвучати з динаміка (з поточної відповіді)
-  function isEcho(h){ for (var i = 0; i < echo.length; i++) if (same(h, echo[i])) return true; return false; }
+  // Суворіше, ніж same(): «повітрообмін» — не відлуння слова «повітря»
+  function sameStrict(h, w){
+    if (h === w) return true;
+    if (Math.min(h.length, w.length) < 4 || Math.abs(h.length - w.length) > 2) return false;
+    return same(h, w);
+  }
+  function isEcho(h){ for (var i = 0; i < echo.length; i++) if (sameStrict(h, echo[i])) return true; return false; }
 
   var pend = null, pendTimer = null;
   function fire(i){
