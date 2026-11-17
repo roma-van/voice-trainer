@@ -446,7 +446,9 @@
     // Ще 2 с фільтруємо «хвіст» власного голосу, який розпізнавач може видати із запізненням
     speaking = false; buffer = ''; echoUntil = Date.now() + 2000; setStatus();
     // Якщо мікрофон був на паузі — вмикаємо після невеликої паузи
-    if (listening && !rec) setTimeout(startRec, 400);
+    // або якщо він «відвалився» під час озвучення — не чекаємо довгої паузи
+    fails = 0;
+    if (listening && (!rec || !recActive)) scheduleRestart(400);
   }
 
   function say(p){
