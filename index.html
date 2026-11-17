@@ -264,7 +264,7 @@
   function interruptOn(){ return $('intr').checked; }
   // Чи має мікрофон працювати зараз
   function micWanted(){ return listening && (!speaking || interruptOn()); }
-  var curIdx = -1, prevIdx = -1, echo = [], echoUntil = 0;
+  var curIdx = -1, prevIdx = -1, echo = [], echoCur = [], echoUntil = 0;
   $('rateV').textContent = (+$('rate').value).toFixed(1);
   $('thrV').textContent = $('thr').value;
 
@@ -351,6 +351,7 @@
     return same(h, w);
   }
   function isEcho(h){ for (var i = 0; i < echo.length; i++) if (sameStrict(h, echo[i])) return true; return false; }
+  function isEchoCur(h){ for (var i = 0; i < echoCur.length; i++) if (sameStrict(h, echoCur[i])) return true; return false; }
 
   var pend = null, pendTimer = null;
   function fire(i){
@@ -401,7 +402,8 @@
         if (s < thr) return;
         // Відсіюємо збіги, які пояснюються лише словами відповіді (голос сторінки чи ваш)
         if (score(tw.filter(function(h){ return !isEcho(h); }), p) < 0.3) { echoSeen = true; return; }
-        if (tail.length && tail.filter(isEcho).length / tail.length > 0.7) { echoSeen = true; return; }
+        // Частку відлуння рахуємо лише за відповіддю, що звучить зараз
+        if (tail.length && tail.filter(isEchoCur).length / tail.length > 0.7) { echoSeen = true; return; }
         // Хвіст має складатися переважно зі слів питання
         if (coverage(tail, p) < 0.5) { echoSeen = true; return; }
       }
@@ -416,14 +418,16 @@
       if (!talking || isFinal && !pend) drop();
       return;
     }
+    // Уже знайдене точніше питання не перехоплює коротше схоже, що «з'явилось» у хвості пізніше
+    if (talking && pend && pend.i !== best && bs <= pend.s) { if (isFinal) fire(pend.i); return; }
     if (isFinal || (bs >= 1 && !talking)) { fire(best); return; }
     // Проміжний результат: Safari на iPhone часто довго не «закриває» фразу.
     // Якщо той самий збіг тримається — відповідаємо, не чекаючи кінця фрази.
     // Під час відповіді чекаємо довше: раптом це початок вашого повторення.
     var hold = talking ? 600 : 800;
     var now = Date.now();
-    if (pend && pend.i === best) { if (now - pend.t >= hold) fire(best); return; }
-    pend = { i: best, t: now };
+    if (pend && pend.i === best) { pend.s = Math.max(pend.s, bs); if (now - pend.t >= hold) fire(best); return; }
+    pend = { i: best, t: now, s: bs };
     clearTimeout(pendTimer);
     pendTimer = setTimeout(function(){ if (pend && pend.i === best) fire(best); }, hold + 100);
   }
@@ -506,7 +510,8 @@
     speaking = true; buffer = '';
     var newIdx = pairs.indexOf(p);
     prevIdx = interrupted && curIdx !== newIdx ? curIdx : -1;
-    echo = keyWords(p.a).concat(interrupted && prevIdx >= 0 ? keyWords(pairs[prevIdx].a) : []);
+    echoCur = keyWords(p.a);
+    echo = echoCur.concat(interrupted && prevIdx >= 0 ? keyWords(pairs[prevIdx].a) : []);
     curIdx = newIdx;
     var keepMic = listening && interruptOn() && rec;
     if (!keepMic) stopRec();          // режим без перебивання: мікрофон на паузу
