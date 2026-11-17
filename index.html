@@ -269,7 +269,8 @@
   $('thrV').textContent = $('thr').value;
 
   function save(){
-    try { localStorage.setItem(KEY, JSON.stringify({ qa:$('qa').value, lang:$('lang').value, rate:$('rate').value, thr:$('thr').value, intr:$('intr').checked, voice:$('voice').value || savedVoice || '' })); } catch(e){}
+    try { localStorage.setItem(KEY, JSON.stringify({ qa:$('qa').value, lang:$('lang').value, rate:$('rate').value, thr:$('thr').value, intr:$('intr').checked, voice:$('voice').value || savedVoice || '', on:listening })); } catch(e){}
+    try { $('toggle').style.boxShadow = ''; } catch(e){}
   }
 
   var STOP = ['що','як','її','їх','його','це','та','і','й','в','у','на','до','з','із','зі','за','про','для','чи','а','але','або','який','яка','яке','які','такий','така','таке','такі','є','ли','ти','ви','мені','скажи','поясни','будь','ласка','что','это','как','и','в','на','the','a','an','is','of','to','what','how','are','do','does'];
@@ -478,20 +479,36 @@
       if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch(e){} }
       u.onend = next;
       u.onerror = function(e){ if (e && e.error === 'interrupted' && id !== speakId) return; next(); };
-      speechSynthesis.speak(u);
+      // iOS після фону інколи лишає озвучення «на паузі»
+      try { speechSynthesis.resume(); } catch(e){}
+      try { speechSynthesis.speak(u); } catch(e){ next(); }
     }
     // Коротка пауза: iOS ігнорує speak() одразу після cancel()
     setTimeout(next, keepMic ? 120 : 250);
   }
 
+  var note = '';   // причина збою, яку показуємо в статусі
   function setStatus(){
     var d = $('dot'), s = $('status');
-    d.className = 'dot' + (micWanted() ? ' live' : '');
-    s.lastChild.textContent = !listening ? 'Вимкнено' : !speaking ? 'Слухаю…' : interruptOn() ? 'Озвучую відповідь… (слухаю нове питання)' : 'Озвучую відповідь…';
+    d.className = 'dot' + (micWanted() && !note ? ' live' : '');
+    s.lastChild.textContent = !listening ? 'Вимкнено' : note ? note
+      : !speaking ? 'Слухаю…' : interruptOn() ? 'Озвучую відповідь… (слухаю нове питання)' : 'Озвучую відповідь…';
   }
 
+  // --- Екран не гасне, поки тренажер слухає ---
+  var wakeLock = null;
+  function keepAwake(){
+    if (!listening || document.visibilityState !== 'visible' || wakeLock) return;
+    try {
+      navigator.wakeLock.request('screen').then(function(l){
+        wakeLock = l; l.addEventListener('release', function(){ wakeLock = null; });
+      }).catch(function(){});
+    } catch(e){}
+  }
+  function allowSleep(){ try { wakeLock && wakeLock.release(); } catch(e){} wakeLock = null; }
+
   // --- Розпізнавання з автоперезапуском ---
-  var recActive = false, lastActivity = 0, restartTimer = null;
+  var recActive = false, lastActivity = 0, restartTimer = null, fails = 0, gotResult = false, startedAt = 0;
   function stopRec(){
     clearTimeout(restartTimer);
     var r = rec; rec = null; recActive = false;
@@ -508,11 +525,16 @@
     var r = new SR(); rec = r;
     r.lang = $('lang').value; r.continuous = true; r.interimResults = true;
     try { r.maxAlternatives = 5; } catch(e){}   // кілька варіантів почутого
+    gotResult = false; startedAt = Date.now();
     r.onstart = function(){ if (r === rec) { recActive = true; lastActivity = Date.now(); setStatus(); } };
-    r.onaudiostart = r.onspeechstart = function(){ if (r === rec) lastActivity = Date.now(); };
+    r.onaudiostart = r.onspeechstart = function(){ if (r === rec) { lastActivity = Date.now(); if (note) { note = ''; setStatus(); } } };
     r.onresult = function(e){
       if (r !== rec || !micWanted()) return;
-      lastActivity = Date.now();
+      lastActivity = Date.now(); gotResult = true; fails = 0;
+      if (note) { note = ''; setStatus(); }
+      try { handleResult(e); } catch(err){}   // помилка в одній фразі не зупиняє тренажер
+    };
+    function handleResult(e){
       var interim = '', interimAlts = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {
         var res = e.results[i], t = res[0].transcript, alts = '';
@@ -523,19 +545,39 @@
       var shown = (buffer + ' ' + interim).trim().split(' ').slice(-30).join(' ');
       $('heard').textContent = shown || '—';
       if (interim) { var keep = buffer; buffer += ' ' + interim; check(false, interim, interimAlts); if (buffer !== '') buffer = keep; }
-    };
+    }
     r.onerror = function(e){
       if (r !== rec) return;
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        listening = false; stopRec(); $('toggle').classList.remove('on'); $('toggle').textContent = '▶ Почати слухати';
-        $('status').lastChild.textContent = 'Немає доступу до мікрофона. Дозвольте його: Параметри → Safari → Мікрофон, або «аА» в адресному рядку → Параметри вебсайту.';
+        listening = false; stopRec(); allowSleep(); note = ''; save();
+        $('toggle').classList.remove('on'); $('toggle').textContent = '▶ Почати слухати';
+        $('status').lastChild.textContent = 'Немає доступу до мікрофона. Дозвольте його: «аА» в адресному рядку → Параметри вебсайту → Мікрофон → Дозволити.';
+        return;
       }
+      if (e.error === 'network') note = 'Немає зв’язку з розпізнаванням мови — перевірте інтернет, перепідключаюсь…';
+      else if (e.error === 'audio-capture') note = 'Мікрофон зайнятий (дзвінок або інша програма) — пробую знову…';
+      if (e.error !== 'no-speech' && e.error !== 'aborted') fails++;
+      setStatus();
     };
-    // Safari часто зупиняє розпізнавання сам — запускаємо знову
-    r.onend = function(){ if (r !== rec) return; recActive = false; if (micWanted()) scheduleRestart(300); };
-    try { r.start(); lastActivity = Date.now(); } catch(e){ scheduleRestart(1000); }
+    // Safari часто зупиняє розпізнавання сам — запускаємо знову.
+    // Якщо збої йдуть підряд — пауза між спробами поступово росте (до 5 с), щоб не «смикати» мікрофон.
+    r.onend = function(){
+      if (r !== rec) return; recActive = false;
+      // Збій — це коли розпізнавання впало майже одразу після старту; звичайна тиша — не збій
+      if (!gotResult && Date.now() - startedAt < 1500) fails++;
+      else if (!note) fails = 0;
+      if (micWanted()) scheduleRestart(fails > 2 ? Math.min(5000, 300 * Math.pow(2, fails - 2)) : 300);
+    };
+    try { r.start(); lastActivity = Date.now(); } catch(e){ fails++; scheduleRestart(1000); }
     setStatus();
   }
+
+  // Будь-яка непередбачена помилка: не зупиняємось, а перезапускаємо мікрофон
+  window.addEventListener('error', function(){ if (micWanted()) scheduleRestart(1000); });
+  window.addEventListener('unhandledrejection', function(){ if (micWanted()) scheduleRestart(1000); });
+  // Інтернет повернувся — одразу відновлюємо
+  window.addEventListener('online', function(){ note = ''; fails = 0; if (micWanted()) startRec(); setStatus(); });
+  window.addEventListener('offline', function(){ if (listening) { note = 'Немає інтернету — розпізнавання на iPhone потребує зв’язку. Чекаю…'; setStatus(); } });
 
   // Сторож: якщо Safari «завис» без onend — перезапускаємо
   setInterval(function(){
@@ -544,8 +586,15 @@
   }, 3000);
   // Повернення на вкладку / розблокування телефону
   document.addEventListener('visibilitychange', function(){
-    if (document.visibilityState === 'visible' && micWanted()) startRec();
+    if (document.visibilityState === 'visible') {
+      keepAwake();
+      fails = 0;
+      if (micWanted()) startRec();
+      // Озвучення могло «застрягнути», поки сторінка була у фоні
+      if (speaking) { try { speechSynthesis.resume(); } catch(e){} }
+    }
   });
+  window.addEventListener('pageshow', function(){ if (micWanted()) startRec(); keepAwake(); });
 
   $('toggle').onclick = function(){
     if (!SR) { $('status').lastChild.textContent = 'Цей браузер не розпізнає мову. Відкрийте сторінку в Google Chrome.'; return; }
@@ -558,11 +607,19 @@
       buffer = '';
       // Розблоковуємо озвучення жестом користувача (обов'язково на iOS)
       try { var w = new SpeechSynthesisUtterance(' '); w.volume = 0; speechSynthesis.speak(w); } catch(e){}
-      loadVoices(); startRec();
+      note = ''; fails = 0;
+      loadVoices(); startRec(); keepAwake();
     }
-    else { stopRec(); speakId++; clearTimeout(speakTimer); try { speechSynthesis.cancel(); } catch(e){} speaking = false; }
+    else { stopRec(); allowSleep(); note = ''; speakId++; clearTimeout(speakTimer); try { speechSynthesis.cancel(); } catch(e){} speaking = false; }
     setStatus(); save();
   };
+  // Якщо iPhone перезавантажив сторінку, поки тренажер слухав, — нагадуємо ввімкнути знову
+  try {
+    if (JSON.parse(localStorage.getItem(KEY) || '{}').on) {
+      $('status').lastChild.textContent = 'Сторінку перезавантажено, тренажер зараз не слухає. Натисніть «Почати слухати», щоб продовжити.';
+      $('toggle').style.boxShadow = '0 0 0 4px rgba(196,97,58,.35)';
+    }
+  } catch(e){}
   $('repeat').onclick = function(){ if (lastAnswer) say(lastAnswer); };
   $('save').onclick = function(){ parse(); save(); };
   $('qa').addEventListener('input', function(){ parse(); save(); });
