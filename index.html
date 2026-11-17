@@ -491,9 +491,9 @@
     if (!('speechSynthesis' in window)) return;
     var id = ++speakId;
     clearTimeout(speakTimer);
-    speaking = true; buffer = '';
     // Якщо перебили попередню відповідь, а ви ще договорюєте її — її слова теж не рахуємо
     var interrupted = speaking || Date.now() < echoUntil;
+    speaking = true; buffer = '';
     var newIdx = pairs.indexOf(p);
     prevIdx = interrupted && curIdx !== newIdx ? curIdx : -1;
     echo = keyWords(p.a).concat(interrupted && prevIdx >= 0 ? keyWords(pairs[prevIdx].a) : []);
