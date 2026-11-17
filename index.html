@@ -544,8 +544,10 @@
     // Якщо мікрофон був на паузі — вмикаємо після невеликої паузи
     // Після озвучення iPhone часто «глухне»: мікрофон наче працює, але нічого не чує.
     // Тому завжди запускаємо розпізнавання наново.
+    // Але якщо ви саме зараз говорите (щойно були результати) — не перериваємо, щоб не загубити слова.
     fails = 0;
-    if (listening) { stopRec(); scheduleRestart(250); }
+    if (listening && Date.now() - lastResultAt > 1500) { stopRec(); scheduleRestart(50); }
+    else if (listening && (!rec || !recActive)) scheduleRestart(50);
   }
 
   function say(p){
@@ -584,7 +586,7 @@
       if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch(e){} }
       u.onend = next;
       // Коли почався звук відповіді, iOS перемикає аудіо — перезапускаємо мікрофон, щоб він не «оглух»
-      if (i === 1 && keepMic) u.onstart = function(){ if (id === speakId && micWanted()) scheduleRestart(300); };
+      if (i === 1 && keepMic) u.onstart = function(){ if (id === speakId && micWanted() && Date.now() - lastResultAt > 1500) scheduleRestart(100); };
       u.onerror = function(e){ if (e && e.error === 'interrupted' && id !== speakId) return; next(); };
       // iOS після фону інколи лишає озвучення «на паузі»
       try { speechSynthesis.resume(); } catch(e){}
@@ -615,7 +617,7 @@
   function allowSleep(){ try { wakeLock && wakeLock.release(); } catch(e){} wakeLock = null; }
 
   // --- Розпізнавання з автоперезапуском ---
-  var recActive = false, lastActivity = 0, restartTimer = null, fails = 0, gotResult = false, startedAt = 0;
+  var recActive = false, lastActivity = 0, restartTimer = null, fails = 0, gotResult = false, startedAt = 0, lastResultAt = 0;
   function stopRec(){
     clearTimeout(restartTimer);
     var r = rec; rec = null; recActive = false;
@@ -637,7 +639,7 @@
     r.onaudiostart = r.onspeechstart = function(){ if (r === rec) { lastActivity = Date.now(); if (note) { note = ''; setStatus(); } } };
     r.onresult = function(e){
       if (r !== rec || !micWanted()) return;
-      lastActivity = Date.now(); gotResult = true; fails = 0;
+      lastActivity = lastResultAt = Date.now(); gotResult = true; fails = 0;
       if (note) { note = ''; setStatus(); }
       try { handleResult(e); } catch(err){}   // помилка в одній фразі не зупиняє тренажер
     };
