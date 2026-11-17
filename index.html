@@ -374,6 +374,7 @@
 
   function check(isFinal, chunk, alts){
     var talking = speaking || Date.now() < echoUntil;
+    if (pend && Date.now() - pend.t > 3000) { pend = null; clearTimeout(pendTimer); }   // застарілий кандидат
     // Під час озвучення дивимось лише на останню фразу, щоб не змішувати з власним голосом
     var words = keyWords(talking ? (chunk || '') : buffer).slice(-40);
     // Інші варіанти розпізнавання тієї ж фрази — допомагають, коли сказано тихо або нечітко
