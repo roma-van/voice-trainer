@@ -215,6 +215,13 @@
           <option value="de-DE">Deutsch</option>
         </select>
       </div>
+      <div style="grid-column:1/-1">Голос
+        <div class="row" style="flex-wrap:nowrap">
+          <select id="voice" style="flex:1"><option value="">Автоматично (найкращий доступний)</option></select>
+          <button class="sec" id="testVoice" type="button" style="padding:8px 12px">Прослухати</button>
+        </div>
+        <span class="hint">★ — покращені, більш природні голоси. На iPhone їх можна завантажити: Параметри → Доступність → Усний контент → Голоси → Українська → Леся (покращений). Після завантаження перезавантажте сторінку.</span>
+      </div>
       <div>Швидкість мовлення: <span id="rateV">1.0</span>
         <input type="range" id="rate" min="0.6" max="1.4" step="0.1" value="1">
       </div>
@@ -251,6 +258,7 @@
     if (s.qa) $('qa').value = s.qa; if (s.lang) $('lang').value = s.lang;
     if (s.rate) $('rate').value = s.rate; if (s.thr) $('thr').value = s.thr;
     if (typeof s.intr === 'boolean') $('intr').checked = s.intr;
+    var savedVoice = s.voice || '';
   } catch(e){}
   function interruptOn(){ return $('intr').checked; }
   // Чи має мікрофон працювати зараз
@@ -260,7 +268,7 @@
   $('thrV').textContent = $('thr').value;
 
   function save(){
-    try { localStorage.setItem(KEY, JSON.stringify({ qa:$('qa').value, lang:$('lang').value, rate:$('rate').value, thr:$('thr').value, intr:$('intr').checked })); } catch(e){}
+    try { localStorage.setItem(KEY, JSON.stringify({ qa:$('qa').value, lang:$('lang').value, rate:$('rate').value, thr:$('thr').value, intr:$('intr').checked, voice:$('voice').value || savedVoice || '' })); } catch(e){}
   }
 
   var STOP = ['що','як','її','їх','його','це','та','і','й','в','у','на','до','з','із','зі','за','про','для','чи','а','але','або','який','яка','яке','які','такий','така','таке','такі','є','ли','ти','ви','мені','скажи','поясни','будь','ласка','что','это','как','и','в','на','the','a','an','is','of','to','what','how','are','do','does'];
@@ -327,11 +335,43 @@
 
   // --- Озвучення (iOS Safari) ---
   var voices = [], speakId = 0, speakTimer = null;
-  function loadVoices(){ try { voices = speechSynthesis.getVoices() || []; } catch(e){ voices = []; } }
+  // Наскільки «людський» голос: покращені/преміум/нейронні — вище
+  function quality(v){
+    var n = (v.name + ' ' + (v.voiceURI || '')).toLowerCase();
+    var q = 0;
+    if (/premium|преміум/.test(n)) q += 3;
+    if (/enhanced|покращ|улучш|natural|neural|online|siri/.test(n)) q += 2;
+    if (/compact|eloquence|novelty|bad news|bells|bubbles|cellos|jester|organ|trinoids|whisper|zarvox|superstar|wobble|boing|albert|fred|junior|ralph|kathy|bahh/.test(n)) q -= 3;
+    if (v.localService === false) q += 1;
+    return q;
+  }
+  function sameLang(v, lang){ return v.lang && v.lang.replace('_','-').toLowerCase().indexOf(lang.slice(0,2).toLowerCase()) === 0; }
+  function sortedVoices(){
+    var lang = $('lang').value;
+    return voices.slice().sort(function(a, b){
+      return (sameLang(b, lang) - sameLang(a, lang)) || (quality(b) - quality(a)) || a.name.localeCompare(b.name);
+    });
+  }
+  function fillVoiceList(){
+    var sel = $('voice'), want = sel.value || savedVoice || '';
+    while (sel.options.length > 1) sel.remove(1);
+    var lang = $('lang').value;
+    sortedVoices().forEach(function(v){
+      var o = document.createElement('option');
+      o.value = v.voiceURI || v.name;
+      o.textContent = (quality(v) >= 2 ? '★ ' : '') + v.name + ' (' + v.lang + ')' + (sameLang(v, lang) ? '' : ' — інша мова');
+      sel.appendChild(o);
+    });
+    sel.value = want;
+    if (sel.value !== want) sel.value = '';   // збережений голос зараз недоступний
+  }
+  function loadVoices(){ try { voices = speechSynthesis.getVoices() || []; } catch(e){ voices = []; } fillVoiceList(); }
   function pickVoice(lang){
     if (!voices.length) loadVoices();
-    var two = lang.slice(0,2).toLowerCase();
-    var same = voices.filter(function(x){ return x.lang && x.lang.replace('_','-').toLowerCase().indexOf(two) === 0; });
+    var chosen = $('voice').value;
+    if (chosen) { var c = voices.filter(function(x){ return (x.voiceURI || x.name) === chosen; }); if (c.length) return c[0]; }
+    var same = voices.filter(function(x){ return sameLang(x, lang); })
+      .sort(function(a, b){ return quality(b) - quality(a); });
     if (same.length) return same[0];
     // Голосу для мови немає — беремо будь-який доступний (спершу системний за замовчуванням)
     var def = voices.filter(function(x){ return x.default; });
@@ -472,7 +512,18 @@
   $('qa').addEventListener('input', function(){ parse(); save(); });
   $('rate').oninput = function(){ $('rateV').textContent = (+this.value).toFixed(1); save(); };
   $('thr').oninput = function(){ $('thrV').textContent = this.value; save(); };
-  $('lang').onchange = function(){ save(); if (micWanted()) startRec(); };
+  $('lang').onchange = function(){ save(); fillVoiceList(); if (micWanted()) startRec(); };
+  $('voice').onchange = function(){ savedVoice = this.value; save(); };
+  $('testVoice').onclick = function(){
+    if (!('speechSynthesis' in window)) return;
+    loadVoices();
+    try { speechSynthesis.cancel(); } catch(e){}
+    var sample = { uk:'Привіт! Так звучатимуть відповіді тренажера.', ru:'Привет! Так будут звучать ответы.', pl:'Cześć! Tak będą brzmiały odpowiedzi.', de:'Hallo! So klingen die Antworten.' }[$('lang').value.slice(0,2)] || 'Hello! This is how the answers will sound.';
+    var u = new SpeechSynthesisUtterance(sample), v = pickVoice($('lang').value);
+    u.lang = $('lang').value; u.rate = +$('rate').value;
+    if (v) { try { u.voice = v; u.lang = v.lang; } catch(e){} }
+    speechSynthesis.speak(u);
+  };
   $('intr').onchange = function(){ save(); if (speaking && !interruptOn()) stopRec(); else if (micWanted() && !rec) startRec(); setStatus(); };
   if ('speechSynthesis' in window) {
     loadVoices();
