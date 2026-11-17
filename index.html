@@ -239,6 +239,7 @@
   <div class="card">
     <label>Почуто</label>
     <div id="heard">—</div>
+    <div id="near" class="hint"></div>
   </div>
   <div class="card">
     <div id="answer">—</div>
@@ -297,7 +298,32 @@
     $('count').textContent = 'Пар у списку: ' + pairs.length;
   }
 
-  function same(h, w){ return h === w || (w.length >= 4 && (h.indexOf(w) === 0 || w.indexOf(h) === 0) && Math.min(h.length,w.length) >= 4); }
+  // Відстань Левенштейна — щоб зараховувати недочуті слова («вентеляції», «кліматичі»)
+  function lev(a, b){
+    if (a === b) return 0;
+    var prev = [], cur = [], i, j;
+    for (j = 0; j <= b.length; j++) prev[j] = j;
+    for (i = 1; i <= a.length; i++) {
+      cur = [i];
+      for (j = 1; j <= b.length; j++)
+        cur[j] = Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  var sameCache = {};
+  function same(h, w){
+    if (h === w) return true;
+    if (w.length >= 4 && (h.indexOf(w) === 0 || w.indexOf(h) === 0) && Math.min(h.length,w.length) >= 4) return true;
+    if (Math.min(h.length, w.length) < 4) return false;
+    var key = h + '|' + w;
+    if (key in sameCache) return sameCache[key];
+    var hh = h.slice(0, w.length + 1);   // почуте слово може мати інше закінчення
+    var d = Math.min(lev(h, w), lev(hh, w));
+    var ok = d <= (w.length >= 8 ? 2 : 1) && h[0] === w[0];
+    if (Object.keys(sameCache).length > 20000) sameCache = {};
+    return (sameCache[key] = ok);
+  }
   function score(heardWords, p){
     if (!p.k.length) return 0;
     var hit = 0;
@@ -309,28 +335,46 @@
   // Слово могло прозвучати з динаміка (з поточної відповіді)
   function isEcho(h){ for (var i = 0; i < echo.length; i++) if (same(h, echo[i])) return true; return false; }
 
-  function check(isFinal, chunk){
+  var pend = null, pendTimer = null;
+  function fire(i){
+    clearTimeout(pendTimer); pend = null;
+    if (!listening) return;
+    var now = Date.now();
+    if (lastMatchAt[i] && now - lastMatchAt[i] < 8000) return;
+    lastMatchAt[i] = now;
+    buffer = '';
+    say(pairs[i]);
+  }
+
+  function check(isFinal, chunk, alts){
     var talking = speaking || Date.now() < echoUntil;
     // Під час озвучення дивимось лише на останню фразу, щоб не змішувати з власним голосом
     var words = keyWords(talking ? (chunk || '') : buffer).slice(-40);
+    // Інші варіанти розпізнавання тієї ж фрази — допомагають, коли сказано тихо або нечітко
+    if (alts) words = words.concat(keyWords(alts));
     if (!words.length) return;
     // Під час озвучення: окремо слова, яких немає у відповіді, що звучить
     var fresh = talking ? words.filter(function(h){ return !isEcho(h); }) : words;
     if (talking && !fresh.length) return;
-    var best = null, bs = 0, thr = isFinal ? +$('thr').value / 100 : 1;
+    var best = null, bs = 0, thr = +$('thr').value / 100;
     pairs.forEach(function(p, i){
       if (talking && i === curIdx) return;               // не перезапускати ту саму відповідь
       var s = score(words, p);
       // Відсіюємо збіги, які пояснюються лише власним голосом сторінки
       if (talking && score(fresh, p) < 0.3) return;
       if (s > bs || (s === bs && best !== null && s > 0 && p.k.length > pairs[best].k.length)) { bs = s; best = i; } });
-    if (best !== null && bs >= thr) {
-      var now = Date.now();
-      if (lastMatchAt[best] && now - lastMatchAt[best] < 8000) return;
-      lastMatchAt[best] = now;
-      buffer = '';
-      say(pairs[best]);
-    }
+    // Підказка: що найближче до почутого — допомагає підібрати «Точність збігу»
+    $('near').textContent = best !== null && bs > 0
+      ? 'Найближче: «' + pairs[best].q + '» — ' + Math.round(bs * 100) + '% (поріг ' + Math.round(thr * 100) + '%)' : '';
+    if (best === null || bs < thr) { if (isFinal) { pend = null; clearTimeout(pendTimer); } return; }
+    if (isFinal || bs >= 1) { fire(best); return; }
+    // Проміжний результат: Safari на iPhone часто довго не «закриває» фразу.
+    // Якщо той самий збіг тримається ~0,8 с — відповідаємо, не чекаючи кінця фрази.
+    var now = Date.now();
+    if (pend && pend.i === best) { if (now - pend.t >= 800) fire(best); return; }
+    pend = { i: best, t: now };
+    clearTimeout(pendTimer);
+    pendTimer = setTimeout(function(){ if (pend && pend.i === best) fire(best); }, 900);
   }
 
   // --- Озвучення (iOS Safari) ---
@@ -453,20 +497,22 @@
     stopRec();
     var r = new SR(); rec = r;
     r.lang = $('lang').value; r.continuous = true; r.interimResults = true;
+    try { r.maxAlternatives = 5; } catch(e){}   // кілька варіантів почутого
     r.onstart = function(){ if (r === rec) { recActive = true; lastActivity = Date.now(); setStatus(); } };
     r.onaudiostart = r.onspeechstart = function(){ if (r === rec) lastActivity = Date.now(); };
     r.onresult = function(e){
       if (r !== rec || !micWanted()) return;
       lastActivity = Date.now();
-      var interim = '';
+      var interim = '', interimAlts = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {
-        var t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) { buffer += ' ' + t; check(true, t); }
-        else interim += t;
+        var res = e.results[i], t = res[0].transcript, alts = '';
+        for (var j = 1; j < (res.length || 1); j++) if (res[j] && res[j].transcript) alts += ' ' + res[j].transcript;
+        if (res.isFinal) { buffer += ' ' + t; check(true, t, alts); }
+        else { interim += t; interimAlts += alts; }
       }
       var shown = (buffer + ' ' + interim).trim().split(' ').slice(-30).join(' ');
       $('heard').textContent = shown || '—';
-      if (interim) { var keep = buffer; buffer += ' ' + interim; check(false, interim); if (buffer !== '') buffer = keep; }
+      if (interim) { var keep = buffer; buffer += ' ' + interim; check(false, interim, interimAlts); if (buffer !== '') buffer = keep; }
     };
     r.onerror = function(e){
       if (r !== rec) return;
