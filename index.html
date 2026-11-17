@@ -452,7 +452,10 @@
       return;
     }
     // Уже знайдене точніше питання не перехоплює коротше схоже, що «з'явилось» у хвості пізніше
-    if (talking && pend && pend.i !== best && bs <= pend.s) { if (isFinal) fire(pend.i); return; }
+    // За рівного бала перемагає довше (точніше) питання
+    var weaker = pend && pend.i !== best &&
+      (bs < pend.s || (bs === pend.s && pairs[best].k.length <= pairs[pend.i].k.length));
+    if (talking && weaker) { if (isFinal) fire(pend.i); return; }
     if (isFinal || (bs >= 1 && !talking)) { fire(best); return; }
     // Проміжний результат: Safari на iPhone часто довго не «закриває» фразу.
     // Якщо той самий збіг тримається — відповідаємо, не чекаючи кінця фрази.
