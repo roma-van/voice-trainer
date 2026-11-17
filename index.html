@@ -404,15 +404,32 @@
       if (!talking) s = score(words, p);
       else {
         var L = p.k.length + 2;
-        var tail = cwAll.slice(-L), tw = tail.concat(altAll.slice(-L));
-        s = score(tw, p);
+        var tail = cwAll.slice(-L), altTail = altAll.slice(-L);
+        var isQ = function(h){ return p.k.some(function(w){ return sim(h, w) >= 0.6; }); };
+        // Перше слово питання, якого немає у відповіді, що звучить, — звідси точно говорите ви
+        var ff = 0;
+        while (ff < tail.length && !(isQ(tail[ff]) && !isEchoCur(tail[ff]))) ff++;
+        var anyFreshAlt = altTail.some(function(h){ return isQ(h) && !isEchoCur(h); });
+        if (ff >= tail.length && !anyFreshAlt) {
+          var raw = score(tail.concat(altTail), p);
+          if (raw > nearS) { nearS = raw; nearI = i; }
+          if (raw >= thr) echoSeen = true;   // збіг пояснюється лише словами відповіді
+          return;
+        }
+        // Слова відповіді, що прозвучали ДО вашого питання, дають лише половину бала
+        var hit = 0;
+        p.k.forEach(function(w){
+          var b = 0;
+          for (var x = 0; x < tail.length; x++) b = Math.max(b, sim(tail[x], w) * (x < ff && isEchoCur(tail[x]) ? 0.5 : 1));
+          for (var y = 0; y < altTail.length; y++) b = Math.max(b, sim(altTail[y], w) * (isEchoCur(altTail[y]) ? 0.5 : 1));
+          hit += b;
+        });
+        s = hit / p.k.length;
         if (s > nearS) { nearS = s; nearI = i; }
         if (s < thr) return;
-        // Відсіюємо збіги, які пояснюються лише словами відповіді (голос сторінки чи ваш)
-        if (score(tw.filter(function(h){ return !isEcho(h); }), p) < 0.3) { echoSeen = true; return; }
         // Обрізаємо хвіст до першого слова питання: слова відповіді перед питанням не рахуються
         var st = 0;
-        while (st < tail.length && !p.k.some(function(w){ return sim(tail[st], w) >= 0.6; })) st++;
+        while (st < tail.length && !isQ(tail[st])) st++;
         var span = tail.slice(st);
         // Частку відлуння рахуємо лише за відповіддю, що звучить зараз
         if (span.length && span.filter(isEchoCur).length / span.length > 0.7) { echoSeen = true; return; }
@@ -437,7 +454,7 @@
     // Проміжний результат: Safari на iPhone часто довго не «закриває» фразу.
     // Якщо той самий збіг тримається — відповідаємо, не чекаючи кінця фрази.
     // Під час відповіді чекаємо довше: раптом це початок вашого повторення.
-    var hold = talking ? 600 : 800;
+    var hold = talking ? 900 : 800;
     var now = Date.now();
     if (pend && pend.i === best) { pend.s = Math.max(pend.s, bs); if (now - pend.t >= hold) fire(best); return; }
     pend = { i: best, t: now, s: bs };
