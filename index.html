@@ -382,7 +382,7 @@
     var cw = talking ? keyWords(chunk || '') : [];
     if (talking && cw.length) {
       var echoShare = cw.filter(isEcho).length / cw.length;
-      if (echoShare > 0.6) return drop('Схоже на повторення відповіді — ігнорую');
+      if (echoShare > 0.7) return drop('Схоже на повторення відповіді — ігнорую');
     }
     function coverage(p){   // яка частка сказаної фрази — це слова питання p
       if (!cw.length) return 1;
