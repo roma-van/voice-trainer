@@ -402,10 +402,14 @@
         if (s < thr) return;
         // Відсіюємо збіги, які пояснюються лише словами відповіді (голос сторінки чи ваш)
         if (score(tw.filter(function(h){ return !isEcho(h); }), p) < 0.3) { echoSeen = true; return; }
+        // Обрізаємо хвіст до першого слова питання: слова відповіді перед питанням не рахуються
+        var st = 0;
+        while (st < tail.length && !p.k.some(function(w){ return sim(tail[st], w) >= 0.6; })) st++;
+        var span = tail.slice(st);
         // Частку відлуння рахуємо лише за відповіддю, що звучить зараз
-        if (tail.length && tail.filter(isEchoCur).length / tail.length > 0.7) { echoSeen = true; return; }
-        // Хвіст має складатися переважно зі слів питання
-        if (coverage(tail, p) < 0.5) { echoSeen = true; return; }
+        if (span.length && span.filter(isEchoCur).length / span.length > 0.7) { echoSeen = true; return; }
+        // Фраза від першого слова питання має складатися переважно зі слів питання
+        if (coverage(span, p) < 0.5) { echoSeen = true; return; }
       }
       if (!talking && s > nearS) { nearS = s; nearI = i; }
       if (s > bs || (s === bs && best !== null && s > 0 && p.k.length > pairs[best].k.length)) { bs = s; best = i; } });
