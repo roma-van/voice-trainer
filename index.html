@@ -301,10 +301,11 @@
   // Слово могло прозвучати з динаміка (з поточної відповіді)
   function isEcho(h){ for (var i = 0; i < echo.length; i++) if (same(h, echo[i])) return true; return false; }
 
-  function check(isFinal){
-    var words = keyWords(buffer).slice(-40);
-    if (!words.length) return;
+  function check(isFinal, chunk){
     var talking = speaking || Date.now() < echoUntil;
+    // Під час озвучення дивимось лише на останню фразу, щоб не змішувати з власним голосом
+    var words = keyWords(talking ? (chunk || '') : buffer).slice(-40);
+    if (!words.length) return;
     // Під час озвучення: окремо слова, яких немає у відповіді, що звучить
     var fresh = talking ? words.filter(function(h){ return !isEcho(h); }) : words;
     if (talking && !fresh.length) return;
@@ -379,7 +380,8 @@
       if (i >= list.length) { finishSpeaking(id); return; }
       var u = new SpeechSynthesisUtterance(list[i++]);
       u.rate = rate;
-      if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = lang;
+      u.lang = lang;
+      if (voice) { try { u.voice = voice; u.lang = voice.lang; } catch(e){} }
       u.onend = next;
       u.onerror = function(e){ if (e && e.error === 'interrupted' && id !== speakId) return; next(); };
       speechSynthesis.speak(u);
@@ -419,12 +421,12 @@
       var interim = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {
         var t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) { buffer += ' ' + t; check(true); }
+        if (e.results[i].isFinal) { buffer += ' ' + t; check(true, t); }
         else interim += t;
       }
       var shown = (buffer + ' ' + interim).trim().split(' ').slice(-30).join(' ');
       $('heard').textContent = shown || '—';
-      if (interim) { var keep = buffer; buffer += ' ' + interim; check(false); if (buffer !== '') buffer = keep; }
+      if (interim) { var keep = buffer; buffer += ' ' + interim; check(false, interim); if (buffer !== '') buffer = keep; }
     };
     r.onerror = function(e){
       if (r !== rec) return;
