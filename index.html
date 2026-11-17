@@ -252,9 +252,7 @@
   var KEY = 'voice-trainer-budivli-v1';
   // хеші попередніх стандартних списків: якщо збережено саме їх, беремо новий список із конспекту
   var OLD_QA = [1497741806];
-  function qh(s){ s = String(s).replace(/
-?/g,'
-').trim(); var h = 5381; for (var i=0;i<s.length;i++) h = (h*33 + s.charCodeAt(i)) >>> 0; return h; }
+  function qh(s){ s = String(s).replace(/\r\n?/g,'\n').trim(); var h = 5381; for (var i=0;i<s.length;i++) h = (h*33 + s.charCodeAt(i)) >>> 0; return h; }
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   var pairs = [], rec = null, listening = false, speaking = false;
