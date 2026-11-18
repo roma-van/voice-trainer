@@ -266,7 +266,10 @@
   } catch(e){}
   function interruptOn(){ return $('intr').checked; }
   // Чи має мікрофон працювати зараз
-  function micWanted(){ return listening && (!speaking || interruptOn()); }
+  // Мікрофон не вимикаємо ніколи, поки тренажер увімкнено (і під час відповіді теж)
+  function micWanted(){ return listening; }
+  // Чи реагувати на почуте зараз (без «перебивання» під час відповіді почуте ігноруємо, але мікрофон працює)
+  function hearWanted(){ return listening && (!speaking || interruptOn()); }
   var curIdx = -1, prevIdx = -1, echo = [], echoCur = [], echoUntil = 0;
   $('rateV').textContent = (+$('rate').value).toFixed(1);
   $('thrV').textContent = $('thr').value;
@@ -575,8 +578,7 @@
     echoCur = keyWords(p.a);
     echo = echoCur.concat(interrupted && prevIdx >= 0 ? keyWords(pairs[prevIdx].a) : []);
     curIdx = newIdx;
-    var keepMic = listening && interruptOn() && rec;
-    if (!keepMic) stopRec();          // режим без перебивання: мікрофон на паузу
+    var keepMic = listening && rec;   // мікрофон лишається увімкненим і під час відповіді
     setStatus();
     try { speechSynthesis.cancel(); } catch(e){}  // обриваємо попередню відповідь
     var lang = $('lang').value, rate = +$('rate').value;
@@ -625,6 +627,7 @@
   function allowSleep(){ try { wakeLock && wakeLock.release(); } catch(e){} wakeLock = null; }
 
   // --- Розпізнавання з автоперезапуском ---
+  var everHeard = false;   // мікрофон хоч раз щось почув — доступ точно є
   var recActive = false, lastActivity = 0, restartTimer = null, fails = 0, gotResult = false, startedAt = 0, lastResultAt = 0;
   function stopRec(){
     clearTimeout(restartTimer);
@@ -644,11 +647,12 @@
     try { r.maxAlternatives = 5; } catch(e){}   // кілька варіантів почутого
     gotResult = false; startedAt = Date.now();
     r.onstart = function(){ if (r === rec) { recActive = true; lastActivity = Date.now(); setStatus(); } };
-    r.onaudiostart = r.onspeechstart = function(){ if (r === rec) { lastActivity = Date.now(); if (note) { note = ''; setStatus(); } } };
+    r.onaudiostart = r.onspeechstart = function(){ if (r === rec) { lastActivity = Date.now(); everHeard = true; if (note) { note = ''; setStatus(); } } };
     r.onresult = function(e){
       if (r !== rec || !micWanted()) return;
-      lastActivity = lastResultAt = Date.now(); gotResult = true; fails = 0;
+      lastActivity = lastResultAt = Date.now(); gotResult = true; everHeard = true; fails = 0;
       if (note) { note = ''; setStatus(); }
+      if (!hearWanted()) return;   // відповідь звучить, перебивання вимкнено — почуте пропускаємо
       try { handleResult(e); } catch(err){}   // помилка в одній фразі не зупиняє тренажер
     };
     function handleResult(e){
@@ -665,6 +669,10 @@
     }
     r.onerror = function(e){
       if (r !== rec) return;
+      // Якщо мікрофон уже працював — це тимчасова відмова iOS (Siri, дзвінок, фон). Не вимикаємось, пробуємо знову.
+      if ((e.error === 'not-allowed' || e.error === 'service-not-allowed') && everHeard) {
+        note = 'Мікрофон тимчасово недоступний — пробую знову…'; fails++; setStatus(); return;
+      }
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         listening = false; stopRec(); allowSleep(); note = ''; save();
         $('toggle').classList.remove('on'); $('toggle').textContent = '▶ Почати слухати';
@@ -734,8 +742,15 @@
   // Якщо iPhone перезавантажив сторінку, поки тренажер слухав, — нагадуємо ввімкнути знову
   try {
     if (JSON.parse(localStorage.getItem(KEY) || '{}').on) {
-      $('status').lastChild.textContent = 'Сторінку перезавантажено, тренажер зараз не слухає. Натисніть «Почати слухати», щоб продовжити.';
+      $('status').lastChild.textContent = 'Сторінку перезавантажено. Торкніться будь-де на екрані — тренажер знову почне слухати.';
       $('toggle').style.boxShadow = '0 0 0 4px rgba(196,97,58,.35)';
+      // iPhone дозволяє вмикати мікрофон тільки після дотику — тож перший дотик будь-де знову вмикає слухання
+      var resume = function(ev){
+        document.removeEventListener('touchend', resume, true); document.removeEventListener('click', resume, true);
+        if (listening || (ev && ev.target && ev.target.id === 'toggle')) return;
+        $('toggle').click();
+      };
+      document.addEventListener('touchend', resume, true); document.addEventListener('click', resume, true);
     }
   } catch(e){}
   $('repeat').onclick = function(){ if (lastAnswer) say(lastAnswer); };
@@ -759,7 +774,7 @@
     if (v) { try { u.voice = v; u.lang = v.lang; } catch(e){} }
     speechSynthesis.speak(u);
   };
-  $('intr').onchange = function(){ save(); if (speaking && !interruptOn()) stopRec(); else if (micWanted() && !rec) startRec(); setStatus(); };
+  $('intr').onchange = function(){ save(); if (micWanted() && !rec) startRec(); setStatus(); };
   if ('speechSynthesis' in window) {
     loadVoices();
     try { speechSynthesis.addEventListener('voiceschanged', loadVoices); } catch(e){ speechSynthesis.onvoiceschanged = loadVoices; }
